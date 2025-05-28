@@ -1,60 +1,104 @@
-import streamlit as st
 import os
+import requests
+import pandas as pd
+import streamlit as st
 from dotenv import load_dotenv
-from openai import OpenAI
+import openai
+import datetime
 
-
-# Load OpenAI API key from .env
+# Load environment variables
 load_dotenv()
-client = OpenAI()
-# Pass the key explicitly from env
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai.api_key = os.getenv("OPENAI_API_KEY")
+FOOTYSTATS_API_KEY = os.getenv("FOOTYSTATS_API_KEY")
+BASE_URL = "https://api.footystats.org"
+EPL_LEAGUE_ID = 1  # Premier League competition ID
 
-# Streamlit app layout
+# Streamlit setup
 st.set_page_config(page_title="Match Insight Studio", layout="wide")
 st.title("⚽ Match Insight Studio")
 
-# Match input section
-st.header("Match Info")
-team_a = st.text_input("Team A", placeholder="e.g. Barcelona")
-team_b = st.text_input("Team B", placeholder="e.g. Real Madrid")
-score = st.text_input("Current Score", placeholder="e.g. 1-0")
-minute = st.slider("Minute", 0, 120, 45)
-event_type = st.selectbox("Key Event", ["None", "Goal", "Red Card", "Injury", "Penalty", "Tactical Shift"])
-event_desc = st.text_area("Event Description")
-
-# Optional context
-st.header("Optional Context")
-coach_notes = st.text_area("Coach Notes", placeholder="e.g. Coach X tends to bunker after scoring.")
-include_betting = st.checkbox("Include betting insights?")
-tone = st.selectbox("Tone", ["Neutral", "Tactical", "Casual", "Spicy Twitter", "Insightful Analyst"])
-
-# Submit button
-if st.button("Generate Summary"):
-    with st.spinner("Generating summary..."):
-        try:
-            prompt = f"""
-            Write a {tone.lower()} tweet-style summary of a football match.
-            Teams: {team_a} vs {team_b}
-            Score: {score}, Minute: {minute}
-            Event: {event_type} - {event_desc}
-            Coach Notes: {coach_notes}
-            {"Include betting insight in the summary." if include_betting else "Exclude betting insight."}
-            Make it sharp, tactical, and engaging for football fans.
-            """
-
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                max_tokens=180
-            )
-
-            summary = response.choices[0].message.content
-            st.success("Summary Generated")
-            st.text_area("Generated Summary", value=summary, height=200)
-
-        except Exception as e:
-            st.error(f"Error: {e}")
+# Utility functions
+def get_matches_by_date(date: str) -> list:
+    """Fetch fixtures for a given date, then filter for EPL by competition_id."""
+    url = (
+        f"{BASE_URL}/fixtures-by-date"
+        f"?key={FOOTYSTATS_API_KEY}&from={date}&to={date}"
+    )
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        # Filter to EPL fixtures only
+        epl = [m for m in data if m.get("competition_id") == EPL_LEAGUE_ID]
+        return epl
+    except requests.exceptions.RequestException as e:
+        st.error(f"FootyStats fixtures error: {e}")
+        return []
 
 
+def prepare_dataframe(raw: list) -> pd.DataFrame:
+    """Normalize raw match list into a DataFrame and rename fields."""
+    if not raw:
+        return pd.DataFrame()
+    df = pd.json_normalize(raw)
+    # Parse dates
+    df["match_date"] = pd.to_datetime(
+        df.get("match_date", ""), errors='coerce'
+    ).dt.date
+    # Map and rename fields
+    mapping = {
+        "match_date": "match_date",
+        "home_name": "home_name",
+        "away_name": "away_name",
+        "home_goal_count": "home_goals",
+        "away_goal_count": "away_goals",
+        "home_xg": "home_xg",
+        "away_xg": "away_xg",
+        "home_corners": "home_corners",
+        "away_corners": "away_corners",
+        "btts": "btts",
+        "status": "status"
+    }
+    df = df.rename(columns=mapping)
+    return df[list(mapping.values())]
+
+
+def build_prompt(row: pd.Series, tone: str, coach: str,
+                 event: str, desc: str, betting: bool) -> str:
+    team_a, team_b = row.home_name, row.away_name
+    score = f"{row.home_goals} - {row.away_goals}"
+    context_map = {
+        "FT": "post-match analysis",
+        "NS": "pre-match preview",
+        "1H": "in-play live summary",
+        "2H": "in-play live summary",
+        "HT": "halftime insight",
+        "ET": "in-play live summary",
+        "P": "in-play live summary"
+    }
+    ctx = context_map.get(row.status, "match update")
+    betting_line = "Include betting insight." if betting else "Exclude betting insight."
+    return (
+        f"Write a {tone.lower()} tweet-style {ctx} of a football match.\n"
+        f"Teams: {team_a} vs {team_b}\n"
+        f"Score: {score}\n"
+        f"Event: {event} - {desc}\n"
+        f"Coach Notes: {coach}\n"
+        f"{betting_line}\n"
+        "Make it sharp, tactical, and engaging for football fans."
+    )
+
+# UI Controls
+# Default to last matchday of a season the trial supports (e.g. May 19, 2024)
+default_date = datetime.date(2024, 5, 19)
+start_date = datetime.date(2023, 8, 1)
+selected_date = st.date_input(
+    "Select Match Date",
+    value=default_date,
+    min_value=start_date,
+    max_value=default_date
+)
+date_str = selected_date.isoformat()
+
+# User inputs
+...
