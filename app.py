@@ -101,4 +101,37 @@ selected_date = st.date_input(
 date_str = selected_date.isoformat()
 
 # User inputs
+# ↓ Replace the "..." with the code below ↓
+
+# 1. Fetch raw matches for the chosen date
+with st.spinner("Fetching fixtures…"):
+    raw_matches = get_matches_by_date(date_str)
+
+# 2. Prepare DataFrame
+df_matches = prepare_dataframe(raw_matches)
+
+# 3. Handle no‐data / render a selectbox
+if df_matches.empty:
+    st.warning(f"No Premier League fixtures found on {date_str}.")
+else:
+    # Build a list of strings like "Arsenal vs Chelsea (2024-05-19)"
+    options = df_matches.apply(
+        lambda row: f"{row.home_name} vs {row.away_name} ({row.match_date})", axis=1
+    ).tolist()
+
+    selected = st.selectbox(
+        "Select a match to generate insight for:", options
+    )  # you can use this string later to lookup the row in df_matches
+
+    # OPTIONAL: If you want to show the raw table as well:
+    st.dataframe(df_matches, use_container_width=True)
+
+    # Example: once they select a match, you can pull out that row:
+    idx = options.index(selected)
+    chosen_row = df_matches.iloc[idx]
+
+    st.markdown(
+        f"**You chose:** {chosen_row.home_name} vs {chosen_row.away_name} on {chosen_row.match_date}"
+    )
+    # From here, you can call `build_prompt(chosen_row, …)` or anything else.
 ...
